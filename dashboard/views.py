@@ -1,6 +1,6 @@
-from django.http import HttpResponse
 from django.shortcuts import render
-
+from .models import ItemLot
 
 def home(request):
-    return render(request, 'dashboard/index.html')
+    itens = ItemLot.objects.all()
+    return render(request, 'dashboard/index.html', {'itens' : itens})
