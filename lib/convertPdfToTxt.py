@@ -1,82 +1,106 @@
 from PyPDF2 import PdfReader
 import re
-import os.path
+import os
+import sqlite3
 
-"""
-    1. Retornar o tamanho do documento
-    2. Retirar a primeira página
-    3. Retirar as duas ultimas páginas
-    4. Ler o documento 
-        4.1 Retirar o cabeçalho do documento
-    5. Incluir conteudo num arquivo ".txt"
-    6. Formatar conteudo do .txt para colocar um lote por linha
-"""
+PDF_PATH = "lib/catalogo.pdf"
+TXT_PATH = "catalogo.txt"
+TXT_NO_BREAK_PATH = "catalogo_no_linebreak.txt"
+DB_PATH = "db-app.db"
 
+def get_pdf_reader(pdf_path=PDF_PATH):
+	try:
+		return PdfReader(pdf_path)
+	except Exception as e:
+		print(f"Erro ao abrir PDF: {e}")
+		return None
 
-pdf_reader = PdfReader("catalogo.pdf")
-parts = []
+def get_valid_page_indices(pdf_reader):
+	# Extrai apenas a primeira página
+	return [0]
 
+def extract_pdf_text(pdf_reader):
+	text = ""
+	for i in get_valid_page_indices(pdf_reader):
+		page = pdf_reader.pages[i]
+		page_text = page.extract_text()
+		if page_text:
+			text += page_text + "\n"
+	return text
 
-def set_number_of_pages():
-    total_pages = len(pdf_reader.pages)
-    valid_pages = total_pages - 2
-    return valid_pages
+def save_txt(text, path=TXT_PATH):
+	with open(path, "w", encoding="utf-8") as f:
+		f.write(text)
 
-def get_number_of_pages():
-    return set_number_of_pages()
-
-def visitor_body(text, cm, tm, fontDict, fontSize):
-    y = tm[5]
-    if y > 0 and y < 750:
-        parts.append(text)
-
-def txt_save():
-    numberOfpages = get_number_of_pages()
-
-    for i in range(1, numberOfpages):
-        page = pdf_reader.pages[i]
-        page.extract_text(visitor_text=visitor_body)
-        text_body = "".join(parts)
-
-    with open("catalogo.txt", mode='a+', encoding='utf-8') as file:
-        file.write(text_body + "\n")
-
-def remove_line_break():
-    file = open("catalogo.txt", mode="r", encoding="utf-8")
-
-    for line in file.readlines():
-        a = line.rstrip('\n')
-        with open("catalogo_no_linebreak.txt", mode='a+', encoding='utf-8') as arq:
-            arq.write('{}'.format(a))
-    file.close()
-
-def txt_format():
-    with open('catalogo_no_linebreak.txt', mode='r', encoding='utf-8') as arq:
-        result = re.split(r',00', arq.readline())
-
-        for item in result:
-            with open('saida.txt', mode='a+', encoding='utf-8') as arq:
-                arq.write(item + ',00\n')
+def remove_line_breaks(src=TXT_PATH, dst=TXT_NO_BREAK_PATH):
+	with open(src, "r", encoding="utf-8") as fin, open(dst, "w", encoding="utf-8") as fout:
+		for line in fin:
+			fout.write(line.rstrip("\n"))
 
 def delete_files():
-    file_catalog = os.path.isfile('catalogo.txt')
-    file_catalog_no_linebreak = os.path.isfile('catalogo_no_linebreak.txt')
+	for path in [TXT_PATH, TXT_NO_BREAK_PATH]:
+		if os.path.isfile(path):
+			os.remove(path)
 
-    if file_catalog:
-        os.remove('catalogo.txt')
+def db_exists():
+	return os.path.isfile(DB_PATH)
 
-    if file_catalog_no_linebreak:
-        os.remove('catalogo_no_linebreak.txt')
+def create_database():
+	with sqlite3.connect(DB_PATH) as conn:
+		cursor = conn.cursor()
+		cursor.execute('''CREATE TABLE IF NOT EXISTS lotes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			lote TEXT,
+			contrato TEXT,
+			descricao TEXT,
+			valor TEXT,
+			peso TEXT,
+			Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		);''')
+		conn.commit()
 
-def convert_to_txt():
-    txt_save()
-    remove_line_break()
-    txt_format()
+def parse_and_save_to_db(txt_path=TXT_NO_BREAK_PATH):
+	pattern_lote = r'(\d{4}\.\d{6}-\d{5}\.\d{3}\.\d{8}-\d{1})'
+	with open(txt_path, "r", encoding="utf-8") as f:
+		content = f.read()
+	result = re.split(pattern_lote, content)
 
-def start():
-    if pdf_reader:
-        print('Encontrou o catalogo!')
-        convert_to_txt()
-        delete_files()
+	if not db_exists():
+		create_database()
 
-start()
+	with sqlite3.connect(DB_PATH) as conn:
+		cursor = conn.cursor()
+		count = 1
+		for section in result:
+			if section.strip() == "":
+				continue
+			if re.match(pattern_lote, section):
+				lote = section[:13]
+				contrato = section[13:]
+				cursor.execute("INSERT INTO lotes (lote, contrato) VALUES (?, ?)", (lote, contrato))
+				conn.commit()
+			else:
+				# Extrai descricao, valor, peso
+				descricao = section.strip()
+				valor_match = re.search(r'R\$\s*[\d\.]+,\d{2}', section)
+				valor = valor_match.group() if valor_match else ""
+				peso_match = re.search(r'PESO\s*LOTE:?\s*[\d,]+G', section)
+				peso = peso_match.group() if peso_match else ""
+				cursor.execute("UPDATE lotes SET descricao=?, valor=?, peso=? WHERE id=?", (descricao, valor, peso, count))
+				conn.commit()
+				count += 1
+
+def convert_pdf_to_db():
+	pdf_reader = get_pdf_reader()
+	if not pdf_reader:
+		print("PDF não encontrado ou inválido.")
+		return
+	print("Processando PDF...")
+	text = extract_pdf_text(pdf_reader)
+	save_txt(text)
+	remove_line_breaks()
+	parse_and_save_to_db()
+	print("Processo concluído. Dados salvos no banco de dados.")
+
+if __name__ == "__main__":
+	convert_pdf_to_db()

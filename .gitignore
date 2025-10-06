@@ -4,5 +4,14 @@ venv
 .iml
 lote.txt
 db-app.db
+lib/db-app.db
 saida.txt
 teste_db.py
+db.sqlite3
+catalogo_no_linebreak.txt
+catalogo.txt
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+migrations/
